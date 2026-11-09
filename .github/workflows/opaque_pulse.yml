@@ -25,13 +25,9 @@ jobs:
 
       - name: Execute Opaque Pulse
         env:
-          OPAQUE_PACKET: ${{ github.event.client_payload.p }}
-          OPAQUE_SHARE: ${{ github.event.client_payload.k }}
           OPAQUE_SECRET: ${{ secrets.OPAQUE_RELAY_KEY }}
         run: |
           set +x
-          if [ -n "$OPAQUE_PACKET" ]; then echo "::add-mask::${OPAQUE_PACKET}"; fi
-          if [ -n "$OPAQUE_SHARE" ]; then echo "::add-mask::${OPAQUE_SHARE}"; fi
           if [ -n "$OPAQUE_SECRET" ]; then echo "::add-mask::${OPAQUE_SECRET}"; fi
           python3 -B src/OpaqueRelayRuntime.py >/dev/null 2>&1 || true
           echo "[OPAQUE-RELAY] status=completed"

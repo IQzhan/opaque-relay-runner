@@ -5,10 +5,12 @@ TestOpaqueRelayRuntime: Verification Suite for Node 2 (`N-02-OpaqueRelayRuntime`
 =================================================================================
 Verifies:
   1. Authenticated Ephemeral Envelope encryption/decryption (`EncryptOpaqueRelayEnvelope` <->
-     `DecryptOpaqueRelayEnvelope`), constant-time MAC tamper rejection, and TTL replay protection.
+     `DecryptOpaqueRelayEnvelope`), constant-time MAC tamper rejection, 16-byte nonce enforcement,
+     and `math.isfinite` NaN/Inf/TTL replay protection (`[AUDIT-06]`).
   2. Environment ingestion and immediate sanitization (`SanitizeAndIngestOpaqueEnvironment`).
-  3. Complete console silence (`CaptureAndSilenceStandardStreams`) and end-to-end in-memory bridge
-     hydration and execution (`FetchAndExecutePrivateBridgeInMemory`).
+  3. Complete console silence at both Python stream and OS file-descriptor (`fd=1,2`) levels
+     (`CaptureAndSilenceStandardStreams(silence_os_fds=True)`, `[AUDIT-03]`), plus silent exit (`rc=0`,
+     `0` bytes output) on malformed/corrupted/missing `OPAQUE_PACKET` inputs.
   4. Healthy Low-Frequency Anti-Abuse Cadence Guard (`VerifyHealthyRelayCadence`):
      - Duplicate state fingerprint coalescing, 45s cooldown window, and 30/hour sliding-window rate cap.
   5. Encrypted Telemetry round-trip (`BuildEncryptedTelemetryRecord` <-> `DecryptTelemetryRecord`)
@@ -17,6 +19,8 @@ Verifies:
 from __future__ import annotations
 
 import base64
+import hmac
+import hashlib
 import json
 import os
 import sys
@@ -37,7 +41,7 @@ import OpaqueRelayRuntime as rt  # noqa: E402
 
 
 def VerifyAuthenticatedEnvelopeCryptoAndReplayGuard() -> None:
-    """Tests stream cipher + HMAC tag round-trip, tamper rejection, and TTL window check."""
+    """Tests stream cipher + HMAC tag round-trip, tamper rejection, NaN/Inf bypass block, and nonce length check."""
     now = time.time()
     sample_payload = {
         "v": 1,
@@ -82,6 +86,69 @@ def VerifyAuthenticatedEnvelopeCryptoAndReplayGuard() -> None:
         raise AssertionError("Expired replay envelope must be rejected!")
     except ValueError:
         pass
+
+    # [AUDIT-06] Edge Case: NaN / Inf / negative iat or ttl must NEVER bypass replay guard!
+    for bad_iat, bad_ttl in (
+        (float("nan"), 600.0),
+        (now, float("nan")),
+        (float("inf"), 600.0),
+        (-100.0, 600.0),
+        (now, -10.0),
+        ("not_a_number", 600.0),
+    ):
+        bad_payload = dict(sample_payload, iat=bad_iat, ttl=bad_ttl)
+        bad_pkt = rt.EncryptOpaqueRelayEnvelope(bad_payload, share_k="share_alpha_123", secret_s="sec_beta_456")
+        try:
+            rt.DecryptOpaqueRelayEnvelope(bad_pkt, share_k="share_alpha_123", secret_s="sec_beta_456", now_ts=now)
+            raise AssertionError(f"Malformed iat={bad_iat}, ttl={bad_ttl} must be rejected!")
+        except ValueError:
+            pass
+
+    # [AUDIT-06] Edge Case: Non-16-byte nonce must be rejected!
+    try:
+        rt.EncryptOpaqueRelayEnvelope(sample_payload, share_k="share_alpha_123", nonce_bytes=b"short")
+        raise AssertionError("Short nonce must be rejected by EncryptOpaqueRelayEnvelope!")
+    except ValueError:
+        pass
+
+    master_key = rt.DeriveOpaqueMasterKey("share_alpha_123", "sec_beta_456")
+    bad_nonce = b"12345678"  # 8 bytes instead of 16
+    ct_short = b"abc"
+    sig_short = hmac.new(master_key, bad_nonce + ct_short, hashlib.sha256).hexdigest()
+    forged_env = json.dumps({
+        "v": "1.0",
+        "n": base64.b64encode(bad_nonce).decode("ascii"),
+        "c": base64.b64encode(ct_short).decode("ascii"),
+        "s": sig_short,
+    })
+    try:
+        rt.DecryptOpaqueRelayEnvelope(forged_env, share_k="share_alpha_123", secret_s="sec_beta_456")
+        raise AssertionError("8-byte nonce envelope must be rejected!")
+    except ValueError:
+        pass
+
+
+def VerifyOsFileDescriptorSilencingAndMalformedCliExit() -> None:
+    """
+    Verifies `[AUDIT-03]`:
+      1. `CaptureAndSilenceStandardStreams(silence_os_fds=True)` blocks direct OS `os.write(1, ...)` and `os.write(2, ...)`.
+      2. `RunOpaqueRelayCli` exits 0 with 0 console bytes on corrupted/truncated/empty packets or unknown flags.
+    """
+    with rt.CaptureAndSilenceStandardStreams(silence_os_fds=True) as buf:
+        os.write(1, b"RAW_OS_FD1_SECRET_DO_NOT_LEAK\n")
+        os.write(2, b"RAW_OS_FD2_SECRET_DO_NOT_LEAK\n")
+        print("PYTHON_STDOUT_CAPTURED")
+    assert "PYTHON_STDOUT_CAPTURED" in buf.getvalue()
+
+    for bad_pkt in ("", "!!!not_base64!!!", base64.urlsafe_b64encode(b"{}").decode("ascii")):
+        os.environ["OPAQUE_PACKET"] = bad_pkt
+        os.environ["OPAQUE_SHARE"] = "some_share"
+        with rt.CaptureAndSilenceStandardStreams(silence_os_fds=True) as c_buf:
+            rc = rt.RunOpaqueRelayCli(["--unknown-extra-flag"])
+        assert rc == 0
+        assert c_buf.getvalue() == ""
+        assert "OPAQUE_PACKET" not in os.environ
+        assert "OPAQUE_SHARE" not in os.environ
 
 
 def VerifyHealthyCadenceAntiAbuseGuard() -> None:
@@ -208,27 +275,22 @@ def VerifyInMemoryExecutionAndEncryptedTelemetryEndToEnd() -> None:
             rc = rt.RunOpaqueRelayCli([])
 
         assert rc == 0
-        # Zero characters may be printed to stdout/stderr during relay pulse execution!
         assert console_check.getvalue() == "", f"Console leaked output: {console_check.getvalue()}"
-        # Sensitive env vars must be purged from os.environ!
         assert "OPAQUE_PACKET" not in os.environ
         assert "OPAQUE_SHARE" not in os.environ
         assert "OPAQUE_SECRET" not in os.environ
 
-        # Encrypted telemetry must be uploaded to mock Drive without any plaintext leakage
         assert "f_telem_1" in store
         raw_telem_str = store["f_telem_1"]["bytes"].decode("utf-8")
         assert "internal_private_diagnostic_line_do_not_leak" not in raw_telem_str
         assert "bridge_ok" not in raw_telem_str
 
-        # Authorized control plane can decrypt the telemetry losslessly
         telem_doc = json.loads(raw_telem_str)
         dec_telem = rt.DecryptTelemetryRecord(telem_doc, share_k=share_k, secret_s=secret_s)
         assert dec_telem["execution_summary"]["status"] == "completed"
         assert "bridge_report_keys" in dec_telem["execution_summary"]
         assert "internal_private_diagnostic_line_do_not_leak" in dec_telem["captured_log"]
 
-        # Verify CLI --decrypt-telemetry-file mode
         with tempfile.TemporaryDirectory(prefix="dec_cli_") as td:
             tf = Path(td) / "opaque_relay_telemetry.enc.json"
             tf.write_text(raw_telem_str, encoding="utf-8")
@@ -247,6 +309,7 @@ def VerifyInMemoryExecutionAndEncryptedTelemetryEndToEnd() -> None:
 class TestOpaqueRelayRuntimeSuite(unittest.TestCase):
     def test_opaque_relay_runtime_end_to_end(self) -> None:
         VerifyAuthenticatedEnvelopeCryptoAndReplayGuard()
+        VerifyOsFileDescriptorSilencingAndMalformedCliExit()
         VerifyHealthyCadenceAntiAbuseGuard()
         VerifyInMemoryExecutionAndEncryptedTelemetryEndToEnd()
 

@@ -8,10 +8,12 @@ OpaqueRelayRuntime: Zero-Leakage Authenticated In-Memory Execution Relay & Anti-
 - Ingests and immediately pops sensitive environment variables (`OPAQUE_PACKET`, `OPAQUE_SHARE`,
   `OPAQUE_SECRET`), authenticates and decrypts the ephemeral dispatch envelope in memory using
   `HMAC-SHA256` Counter-Mode stream cipher + constant-time `HMAC-SHA256` MAC verification, enforces
-  healthy low-frequency cadence guards (`45s` coalescing debounce + `30/hour` sliding-window cap),
-  hydrates the authorized private bridge payload into an ephemeral `0o700` RAM directory, captures
-  all stdout/stderr in memory (`0` bytes leaked to GitHub Actions console), and uploads encrypted
-  telemetry (`opaque_relay_telemetry.enc.json`) to the private control plane.
+  strict `math.isfinite` NaN/Inf/TTL replay guards and 16-byte nonce validation, enforces healthy
+  low-frequency cadence guards (`45s` coalescing debounce + `30/hour` sliding-window cap), hydrates
+  the authorized private bridge payload into an ephemeral `0o700` RAM directory, captures all
+  stdout/stderr at both Python stream and OS file-descriptor (`fd=1,2`) levels (`0` bytes leaked to
+  GitHub Actions console), and uploads encrypted telemetry (`opaque_relay_telemetry.enc.json`) to
+  the private control plane.
 """
 from __future__ import annotations
 
@@ -22,6 +24,7 @@ import hashlib
 import hmac
 import io
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -98,9 +101,16 @@ def EncryptOpaqueRelayEnvelope(
     Encrypts `payload_obj` into an authenticated Base64URL packet (`HMAC-SHA256-CTR + HMAC-SHA256 MAC`).
     Compatible across Python 3 and Google Apps Script (`Utilities.computeHmacSha256Signature`).
     """
+    if not isinstance(payload_obj, dict):
+        raise ValueError("payload_obj must be a dictionary.")
     master_key = DeriveOpaqueMasterKey(share_k, secret_s)
     pt_bytes = json.dumps(payload_obj, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    eff_nonce = nonce_bytes if (nonce_bytes and len(nonce_bytes) == 16) else os.urandom(16)
+    if nonce_bytes is not None:
+        if len(nonce_bytes) != 16:
+            raise ValueError("Custom nonce_bytes must be exactly 16 bytes.")
+        eff_nonce = nonce_bytes
+    else:
+        eff_nonce = os.urandom(16)
     ct_bytes = _XorStreamBlocks(pt_bytes, master_key, eff_nonce)
     sig_hex = hmac.new(master_key, eff_nonce + ct_bytes, hashlib.sha256).hexdigest()
     envelope_json = json.dumps(
@@ -126,7 +136,8 @@ def DecryptOpaqueRelayEnvelope(
 ) -> Dict[str, Any]:
     """
     Authenticates and decrypts an opaque relay packet in constant time (`hmac.compare_digest`),
-    enforcing replay protection (`iat` / `ttl`) when `enforce_ttl=True`.
+    enforcing strict 16-byte nonce validation and `math.isfinite` replay protection (`iat` / `ttl`)
+    so `NaN` or `Inf` timestamps can never bypass expiration checks (`[AUDIT-06]`).
     """
     raw_str = str(packet_text or "").strip()
     if not raw_str:
@@ -138,9 +149,16 @@ def DecryptOpaqueRelayEnvelope(
         decoded = base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8")
         env = json.loads(decoded)
 
-    nonce_bytes = base64.b64decode(env["n"])
-    ct_bytes = base64.b64decode(env["c"])
+    if not isinstance(env, dict) or "n" not in env or "c" not in env or "s" not in env:
+        raise ValueError("Malformed opaque envelope structure.")
+
+    nonce_bytes = base64.b64decode(str(env["n"]))
+    if len(nonce_bytes) != 16:
+        raise ValueError(f"Invalid nonce length: expected 16 bytes, got {len(nonce_bytes)}.")
+    ct_bytes = base64.b64decode(str(env["c"]))
     provided_sig = str(env.get("s") or "").strip()
+    if len(provided_sig) != 64:
+        raise ValueError("Invalid MAC signature length.")
 
     master_key = DeriveOpaqueMasterKey(share_k, secret_s)
     expected_sig = hmac.new(master_key, nonce_bytes + ct_bytes, hashlib.sha256).hexdigest()
@@ -154,9 +172,23 @@ def DecryptOpaqueRelayEnvelope(
 
     if enforce_ttl:
         cur_time = float(now_ts if now_ts is not None else time.time())
-        iat = float(payload.get("iat") or 0.0)
-        ttl = float(payload.get("ttl") or max_clock_skew_sec)
-        if iat <= 0.0 or abs(cur_time - iat) > max(ttl, max_clock_skew_sec):
+        try:
+            iat = float(payload.get("iat"))
+            ttl = float(payload.get("ttl") if payload.get("ttl") is not None else max_clock_skew_sec)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid non-numeric iat or ttl in opaque payload.") from exc
+        if (
+            not math.isfinite(cur_time)
+            or not math.isfinite(iat)
+            or not math.isfinite(ttl)
+            or not math.isfinite(max_clock_skew_sec)
+            or iat <= 0.0
+            or ttl <= 0.0
+            or max_clock_skew_sec <= 0.0
+        ):
+            raise ValueError("Non-finite or non-positive iat/ttl rejected by replay guard.")
+        effective_window = min(max(ttl, 1.0), max(max_clock_skew_sec, 1.0))
+        if abs(cur_time - iat) > effective_window:
             raise ValueError("Opaque relay packet expired or outside replay window.")
 
     return payload
@@ -194,6 +226,8 @@ def VerifyHealthyRelayCadence(
          to prevent accidental infinite trigger loops or quota abuse.
     """
     cur_ts = float(now_ts if now_ts is not None else time.time())
+    if not math.isfinite(cur_ts) or cur_ts <= 0.0:
+        cur_ts = time.time()
     clean_fp = str(state_fp or "").strip()
     ledger_data: Dict[str, Any] = {
         "last_state_fp": "",
@@ -209,17 +243,27 @@ def VerifyHealthyRelayCadence(
         except Exception:
             pass
 
-    recent_runs = [
-        float(ts)
-        for ts in (ledger_data.get("hourly_timestamps") or [])
-        if (cur_ts - float(ts)) < 3600.0
-    ]
-    last_ts = float(ledger_data.get("last_run_ts") or 0.0)
+    recent_runs = []
+    for ts in (ledger_data.get("hourly_timestamps") or []):
+        try:
+            f_ts = float(ts)
+            if math.isfinite(f_ts) and 0.0 <= (cur_ts - f_ts) < 3600.0:
+                recent_runs.append(f_ts)
+        except (TypeError, ValueError):
+            continue
+
+    try:
+        last_ts = float(ledger_data.get("last_run_ts") or 0.0)
+        if not math.isfinite(last_ts):
+            last_ts = 0.0
+    except (TypeError, ValueError):
+        last_ts = 0.0
+
     last_fp = str(ledger_data.get("last_state_fp") or "")
-    elapsed = cur_ts - last_ts
+    elapsed = max(0.0, cur_ts - last_ts)
 
     if not force_run:
-        if clean_fp and clean_fp == last_fp and elapsed < max(cooldown_sec * 4.0, 180.0):
+        if clean_fp and clean_fp == last_fp and last_ts > 0.0 and elapsed < max(cooldown_sec * 4.0, 180.0):
             ledger_data["hourly_timestamps"] = recent_runs
             ledger_data["coalesced_skips"] = int(ledger_data.get("coalesced_skips") or 0) + 1
             ledger_path.parent.mkdir(parents=True, exist_ok=True)
@@ -269,14 +313,54 @@ def VerifyHealthyRelayCadence(
 
 
 @contextlib.contextmanager
-def CaptureAndSilenceStandardStreams():
+def CaptureAndSilenceStandardStreams(silence_os_fds: bool = False):
     """
-    Redirects Python `sys.stdout` and `sys.stderr` into an isolated in-memory buffer so zero
-    diagnostic lines, filenames, commit hashes, or tracebacks ever reach the runner console.
+    Redirects Python `sys.stdout` and `sys.stderr` into an isolated in-memory buffer,
+    and optionally redirects OS-level file descriptors `1` and `2` to `/dev/null` (`[AUDIT-03]`)
+    so even C extensions or raw FD writes can never leak a single byte to the runner console.
     """
     mem_buffer = io.StringIO()
-    with contextlib.redirect_stdout(mem_buffer), contextlib.redirect_stderr(mem_buffer):
-        yield mem_buffer
+    saved_fd1 = None
+    saved_fd2 = None
+    devnull_fd = None
+    try:
+        if silence_os_fds:
+            try:
+                sys.stdout.flush()
+                sys.stderr.flush()
+                saved_fd1 = os.dup(1)
+                saved_fd2 = os.dup(2)
+                devnull_fd = os.open(os.devnull, os.O_WRONLY)
+                os.dup2(devnull_fd, 1)
+                os.dup2(devnull_fd, 2)
+            except Exception:
+                pass
+        with contextlib.redirect_stdout(mem_buffer), contextlib.redirect_stderr(mem_buffer):
+            yield mem_buffer
+    finally:
+        if saved_fd1 is not None:
+            try:
+                os.dup2(saved_fd1, 1)
+            except Exception:
+                pass
+            try:
+                os.close(saved_fd1)
+            except Exception:
+                pass
+        if saved_fd2 is not None:
+            try:
+                os.dup2(saved_fd2, 2)
+            except Exception:
+                pass
+            try:
+                os.close(saved_fd2)
+            except Exception:
+                pass
+        if devnull_fd is not None:
+            try:
+                os.close(devnull_fd)
+            except Exception:
+                pass
 
 
 def BuildEncryptedTelemetryRecord(
@@ -473,12 +557,13 @@ def _FetchPrivateScriptBytes(envelope: Dict[str, Any], rel_script_path: str) -> 
 def FetchAndExecutePrivateBridgeInMemory(
     envelope: Dict[str, Any],
     cadence_ledger_path: Optional[Path] = None,
+    silence_os_fds: bool = False,
 ) -> Tuple[Dict[str, Any], str]:
     """
     Executes the full private control-plane synchronization inside an isolated `0o700` RAM directory
     with all standard streams captured in memory and zero console leakage.
     """
-    with CaptureAndSilenceStandardStreams() as log_buf:
+    with CaptureAndSilenceStandardStreams(silence_os_fds=silence_os_fds) as log_buf:
         ram_dir = _CreateSecureRamDirectory()
         try:
             ledger_file = cadence_ledger_path or (ram_dir / "cadence_ledger.json")
@@ -587,11 +672,14 @@ def RunOpaqueRelayCli(argv: Optional[List[str]] = None) -> int:
     Main CLI entrypoint for `.github/workflows/opaque_pulse.yml` and local encrypted telemetry decoding.
     Guarantees zero private output on stdout/stderr during relay pulse execution.
     """
-    parser = argparse.ArgumentParser(description="OpaqueRelayRuntime: Zero-Leakage Stateless Relay")
-    parser.add_argument("--decrypt-telemetry-file", type=str, default="", help="Path to opaque_relay_telemetry.enc.json to decrypt locally")
-    parser.add_argument("--share-key", type=str, default="", help="Key share for local telemetry decryption")
-    parser.add_argument("--secret-key", type=str, default="", help="Optional secret key for local telemetry decryption")
-    args = parser.parse_args(argv)
+    try:
+        parser = argparse.ArgumentParser(description="OpaqueRelayRuntime: Zero-Leakage Stateless Relay", add_help=False)
+        parser.add_argument("--decrypt-telemetry-file", type=str, default="")
+        parser.add_argument("--share-key", type=str, default="")
+        parser.add_argument("--secret-key", type=str, default="")
+        args, _ = parser.parse_known_args(argv)
+    except Exception:
+        return 0
 
     if args.decrypt_telemetry_file:
         doc = json.loads(Path(args.decrypt_telemetry_file).read_text(encoding="utf-8"))
@@ -613,7 +701,7 @@ def RunOpaqueRelayCli(argv: Optional[List[str]] = None) -> int:
     except Exception:
         return 0
 
-    summary, captured_log = FetchAndExecutePrivateBridgeInMemory(envelope)
+    summary, captured_log = FetchAndExecutePrivateBridgeInMemory(envelope, silence_os_fds=True)
     try:
         telem_key = str(envelope.get("telemetry_key") or ingested["share"])
         telem_doc = BuildEncryptedTelemetryRecord(

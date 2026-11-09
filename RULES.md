@@ -72,8 +72,8 @@
 
 1. **`[PROJ-RULE-01]` 公开无状态加密中继定位与零私有信息存储铁律 (Stateless Public Relay & Zero Private Metadata)**：
    - 本仓库作为专用公开无状态执行中继（visibility: public），仓库内任何源码、工作流（.github/workflows/opaque_pulse.yml）、文档或测试中严禁出现任何私有仓库名称、云盘目录/文件 ID、明文密钥或个人路径；自动化门禁（VerifyZeroPrivateLeakageInPublicRepo）强制全仓扫描拦截。
-2. **`[PROJ-RULE-02]` 双因子认证流加密信封与抗重放门禁 (Authenticated Ephemeral Envelope & Replay Guard)**：
-   - 所有触发载荷必须经 HMAC-SHA256-CTR 流加密与恒定时间 HMAC-SHA256 认证标签（EncryptOpaqueRelayEnvelope / DecryptOpaqueRelayEnvelope）封装并通过 iat/ttl 时效校验；进程启动瞬间必须立即从 os.environ 抹除敏感环境变量（SanitizeAndIngestOpaqueEnvironment），篡改或过期信封一律静默终止（Fail-Closed）。
+2. **`[PROJ-RULE-02]` 双因子认证流加密信封与有限数抗重放门禁 (Authenticated Ephemeral Envelope & Finite Replay Guard)**：
+   - 所有触发载荷必须经 HMAC-SHA256-CTR 流加密与恒定时间 HMAC-SHA256 认证标签（EncryptOpaqueRelayEnvelope / DecryptOpaqueRelayEnvelope）封装，强制校验 16 字节 Nonce 长度与 math.isfinite(iat/ttl) 有限正数抗重放窗口（严防 NaN/Inf 比较绕过）；进程启动瞬间必须立即从 os.environ 抹除敏感环境变量（SanitizeAndIngestOpaqueEnvironment），任何畸形、篡改或过期信封一律以退出码 0 静默终止（Fail-Closed，0 字节控制台输出）。
 3. **`[PROJ-RULE-03]` GitHub Actions 页面零明文日志与内存级加密遥测回传铁律 (Zero Console Log & Encrypted Telemetry)**：
    - 工作流必须强制开启 set +x、::add-mask:: 与 OS 级文件描述符重定向（>/dev/null 2>&1 || true），并在运行时内通过 CaptureAndSilenceStandardStreams 将全部标准输出/错误输出拦截于内存缓冲区，压缩并加密为 opaque_relay_telemetry.enc.json 回传至私有控制面；GitHub Actions 页面除基础自带日志外仅允许输出固定常量状态标记。
 4. **`[PROJ-RULE-04]` 纯事件驱动、防抖合并与滑动窗口防滥用低频守则 (Event-Driven Coalescing & Anti-Abuse Cadence)**：

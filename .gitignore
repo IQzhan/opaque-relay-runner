@@ -1,0 +1,8 @@
+build/
+bin/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.tmp
+.devkanban/cache.json
+.devkanban/daemon.json

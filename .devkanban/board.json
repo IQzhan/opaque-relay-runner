@@ -1,0 +1,152 @@
+{
+  "schema_version": "3.0.0",
+  "engine_uuid": "devkanban-engine-v3-singleton-9f8e7d6c5b4a",
+  "project_id": "454551581d29",
+  "project_name": "opaque-relay-runner",
+  "project_root": ".",
+  "nodes": {
+    "N-01-OpaqueRelayGovernance": {
+      "node_id": "N-01-OpaqueRelayGovernance",
+      "title": "[Layer-0 Opaque Governance] Zero-Private-Leakage Rules, Workflow Confidentiality & Anti-Abuse Gate",
+      "description": "Enforces RULES.md single-source contract, zero private repository or Drive ID leakage across all public files, and strict workflow console silencing.",
+      "bindings": [
+        {
+          "path": "RULES.md",
+          "scope": "*",
+          "kind": "scope"
+        },
+        {
+          "path": "AGENTS.md",
+          "scope": "*",
+          "kind": "scope"
+        },
+        {
+          "path": ".cursorrules",
+          "scope": null,
+          "kind": "file"
+        },
+        {
+          "path": "README.md",
+          "scope": "*",
+          "kind": "scope"
+        },
+        {
+          "path": ".gitignore",
+          "scope": null,
+          "kind": "file"
+        },
+        {
+          "path": "tests/TestOpaqueRelayGovernance.py",
+          "scope": "*",
+          "kind": "scope"
+        }
+      ],
+      "test": {
+        "command": "python3 -B -m unittest tests/TestOpaqueRelayGovernance.py",
+        "target": "tests/TestOpaqueRelayGovernance.py::TestOpaqueRelayGovernanceSuite",
+        "timeout_sec": 0
+      },
+      "depends_on": [],
+      "status": "PASSED",
+      "ack_digest": "56f5a5f62a10dbb0f6242f99305158d4405d16b3b7a1dcaf5f414aa6487713ce",
+      "pass_digest": "56f5a5f62a10dbb0f6242f99305158d4405d16b3b7a1dcaf5f414aa6487713ce",
+      "bound_files_sha256": "ff928a12570c6cdc753b59b289eae670ac55473fa9750662c569f9a872620ce3",
+      "reviewed_by": "agent",
+      "collapsed": false
+    },
+    "N-02-OpaqueRelayRuntime": {
+      "node_id": "N-02-OpaqueRelayRuntime",
+      "title": "[Layer-1 Opaque Runtime] Authenticated Ephemeral Envelope, In-Memory Bridge Execution & Encrypted Telemetry",
+      "description": "Implements HMAC-SHA256-CTR + MAC envelope authentication, environment sanitization, 45s debounce & 30/hr anti-abuse cadence guard, in-memory execution, and encrypted telemetry upload.",
+      "bindings": [
+        {
+          "path": ".github/workflows/opaque_pulse.yml",
+          "scope": null,
+          "kind": "file"
+        },
+        {
+          "path": "src/OpaqueRelayRuntime.py",
+          "scope": "*",
+          "kind": "scope"
+        },
+        {
+          "path": "tests/TestOpaqueRelayRuntime.py",
+          "scope": "*",
+          "kind": "scope"
+        }
+      ],
+      "test": {
+        "command": "python3 -B -m unittest tests/TestOpaqueRelayRuntime.py",
+        "target": "tests/TestOpaqueRelayRuntime.py::TestOpaqueRelayRuntimeSuite",
+        "timeout_sec": 0
+      },
+      "depends_on": [
+        "N-01-OpaqueRelayGovernance"
+      ],
+      "status": "PASSED",
+      "ack_digest": "0b656e46b584e91f2888a3dc2bcf60b101e1ee16d05d17651ee09f9718b7a3b8",
+      "pass_digest": "0b656e46b584e91f2888a3dc2bcf60b101e1ee16d05d17651ee09f9718b7a3b8",
+      "bound_files_sha256": "666b503fb0938262d2971f4f59d9b4fe406358562031de00e15155958c675d00",
+      "reviewed_by": "agent",
+      "collapsed": false
+    }
+  },
+  "ignore_contracts": [
+    {
+      "pattern": "build/",
+      "kind": "gitignore",
+      "linked_node": "N-01-OpaqueRelayGovernance",
+      "reason": "Build output directory",
+      "risk_acknowledged": true
+    },
+    {
+      "pattern": "bin/",
+      "kind": "gitignore",
+      "linked_node": "N-01-OpaqueRelayGovernance",
+      "reason": "Binary output directory",
+      "risk_acknowledged": true
+    },
+    {
+      "pattern": "__pycache__/",
+      "kind": "gitignore",
+      "linked_node": "N-01-OpaqueRelayGovernance",
+      "reason": "Python bytecode cache",
+      "risk_acknowledged": true
+    },
+    {
+      "pattern": "*.py[cod]",
+      "kind": "gitignore",
+      "linked_node": "N-01-OpaqueRelayGovernance",
+      "reason": "Compiled Python bytecode",
+      "risk_acknowledged": true
+    },
+    {
+      "pattern": ".pytest_cache/",
+      "kind": "gitignore",
+      "linked_node": "N-01-OpaqueRelayGovernance",
+      "reason": "Pytest cache directory",
+      "risk_acknowledged": true
+    },
+    {
+      "pattern": "*.tmp",
+      "kind": "gitignore",
+      "linked_node": "N-01-OpaqueRelayGovernance",
+      "reason": "Temporary atomic write files",
+      "risk_acknowledged": true
+    },
+    {
+      "pattern": ".devkanban/cache.json",
+      "kind": "gitignore",
+      "linked_node": "N-01-OpaqueRelayGovernance",
+      "reason": "DevKanban incremental cache",
+      "risk_acknowledged": true
+    },
+    {
+      "pattern": ".devkanban/daemon.json",
+      "kind": "gitignore",
+      "linked_node": "N-01-OpaqueRelayGovernance",
+      "reason": "DevKanban UI daemon state",
+      "risk_acknowledged": true
+    }
+  ]
+}

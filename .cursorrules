@@ -1,0 +1,3 @@
+@RULES.md
+
+CRITICAL CONTEXT PIN: Read and keep `RULES.md` (`[ZONE-1: UNIVERSAL_ENGINEERING_RULES]` and `[ZONE-2: PROJECT_SPECIFIC_RULES]`) pinned in active context at all times. All hard rules for this repository are unified exclusively in `RULES.md`. Never duplicate or scatter rules into `.cursorrules`, `AGENTS.md`, `CLAUDE.md`, or other files; always write project-specific hard rules only into `[ZONE-2: PROJECT_SPECIFIC_RULES]` of `RULES.md`.

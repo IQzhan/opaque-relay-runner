@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>开发看板 DevKanban Launcher — opaque-relay-runner</title>
+  <style>
+    body {
+      margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      background: #0f172a; color: #f8fafc; font-family: system-ui, -apple-system, sans-serif;
+    }
+    .card {
+      background: #1e293b; border: 1px solid #334155; border-radius: 14px; padding: 28px 34px;
+      max-width: 560px; box-shadow: 0 20px 45px rgba(0,0,0,0.4); text-align: center;
+    }
+    h1 { font-size: 18px; margin: 0 0 10px; color: #38bdf8; }
+    p { font-size: 13px; color: #94a3b8; line-height: 1.6; margin: 8px 0; }
+    code { background: #0f172a; color: #e2e8f0; padding: 3px 7px; border-radius: 5px; font-size: 12px; }
+    .btn {
+      display: inline-block; margin-top: 14px; padding: 9px 18px; border-radius: 8px;
+      background: #0284c7; color: #fff; text-decoration: none; font-size: 13px; font-weight: 600;
+      cursor: pointer; border: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>正在连接开发看板单例服务 · opaque-relay-runner</h1>
+    <p id="status-msg">正在探测本地按需服务 <code>127.0.0.1:18765</code> (Project: <code>opaque-relay-runner</code>)...</p>
+    <p>若服务处于休眠态，正在通过 <code>devkanban://wake</code> 自动唤醒；你也可以直接双击同目录下的 <code>open_kanban.bat</code> 或在终端运行 <code>kb ui</code> 秒级拉起。</p>
+    <a id="enter-btn" class="btn" href="http://127.0.0.1:18765/?project=454551581d29">立即进入可视化看板</a>
+  </div>
+  <script>
+    const defaultRoot = "";
+    const defaultPid = "454551581d29";
+    const port = 18765;
+
+    function detectLocalRoot() {
+      if (window.location.protocol === "file:") {
+        let p = decodeURIComponent(window.location.pathname || "");
+        if (/^\/[A-Za-z]:\//.test(p)) p = p.slice(1);
+        const idx = p.lastIndexOf("/.devkanban/");
+        if (idx > 0) return p.slice(0, idx);
+      }
+      return defaultRoot;
+    }
+
+    const activeRoot = detectLocalRoot();
+    const encRoot = encodeURIComponent(activeRoot);
+    const targetUrl = `http://127.0.0.1:${port}/?project=${defaultPid}&root=${encRoot}`;
+    const healthUrl = `http://127.0.0.1:${port}/api/health?project=${defaultPid}&root=${encRoot}`;
+    const wakeUri = `devkanban://wake?project=${defaultPid}&root=${encRoot}&port=${port}`;
+    document.getElementById("enter-btn").href = targetUrl;
+
+    let wokeOnce = false;
+    async function connectOrWake() {
+      for (let attempt = 0; attempt < 12; attempt++) {
+        try {
+          const res = await fetch(healthUrl, { mode: "cors", cache: "no-store" });
+          if (res.ok) {
+            window.location.replace(targetUrl);
+            return;
+          }
+        } catch (err) {
+          if (!wokeOnce) {
+            wokeOnce = true;
+            const iframe = document.createElement("iframe");
+            iframe.style.display = "none";
+            iframe.src = wakeUri;
+            document.body.appendChild(iframe);
+          }
+        }
+        await new Promise(r => setTimeout(r, 450));
+      }
+    }
+    connectOrWake();
+  </script>
+</body>
+</html>

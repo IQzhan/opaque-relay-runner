@@ -197,13 +197,37 @@ def DecryptOpaqueRelayEnvelope(
 def SanitizeAndIngestOpaqueEnvironment(target_env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
     """
     Extracts opaque bootstrap variables from `target_env` (defaulting to `os.environ`)
-    and immediately purges all sensitive keys so no child process can inherit them.
+    or from the runner's `$GITHUB_EVENT_PATH` JSON file (immediately scrubbing `client_payload`
+    from disk so neither `##[group] env:` nor runner temp files retain packet data, `[AUDIT-11]`),
+    and immediately purges all sensitive keys from `target_env`.
     """
     env_ref = target_env if target_env is not None else os.environ
+    packet = str(env_ref.get("OPAQUE_PACKET") or "").strip()
+    share = str(env_ref.get("OPAQUE_SHARE") or "").strip()
+    secret = str(env_ref.get("OPAQUE_SECRET") or "").strip()
+
+    ev_path_str = str(env_ref.get("GITHUB_EVENT_PATH") or "").strip()
+    if ev_path_str:
+        ev_path = Path(ev_path_str)
+        if ev_path.is_file():
+            try:
+                ev_obj = json.loads(ev_path.read_text(encoding="utf-8"))
+                if isinstance(ev_obj, dict):
+                    cp = ev_obj.get("client_payload")
+                    if isinstance(cp, dict):
+                        if not packet:
+                            packet = str(cp.get("p") or "").strip()
+                        if not share:
+                            share = str(cp.get("k") or "").strip()
+                        ev_obj["client_payload"] = {}
+                        ev_path.write_text(json.dumps(ev_obj), encoding="utf-8")
+            except Exception:
+                pass
+
     ingested = {
-        "packet": str(env_ref.get("OPAQUE_PACKET") or "").strip(),
-        "share": str(env_ref.get("OPAQUE_SHARE") or "").strip(),
-        "secret": str(env_ref.get("OPAQUE_SECRET") or "").strip(),
+        "packet": packet,
+        "share": share,
+        "secret": secret,
     }
     for k in SENSITIVE_ENV_KEYS:
         env_ref.pop(k, None)

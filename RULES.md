@@ -5,7 +5,7 @@
 > 2. 任何智能体在执行任何需求分析、数学物理建模、架构设计、编码实现、文档编写或测试验收前，必须将本文件完整固定在上下文中并 100% 严格遵守 `[ZONE-1]` 与 `[ZONE-2]`。
 > 3. **严禁散落与重复**：所有新增或修改的项目硬规则必须统一写入本文件的 `[ZONE-2: PROJECT_SPECIFIC_RULES]` 中，严禁在 `AGENTS.md`、`CLAUDE.md`、`.cursorrules` 等引导文件中重复抄写或分散定义具体规则条目。
 
-<!-- === [ZONE-1: UNIVERSAL_ENGINEERING_RULES :: BEGIN] (Version: 10.0.4 | Auto-Synced - Do Not Overwrite Project Zone) === -->
+<!-- === [ZONE-1: UNIVERSAL_ENGINEERING_RULES :: BEGIN] (Version: 10.0.7 | Auto-Synced - Do Not Overwrite Project Zone) === -->
 ## 十七项跨领域通用最高铁律 (`[UNI-RULE-01]` ~ `[UNI-RULE-17]`)
 
 1. **`[UNI-RULE-01]` 【单一事实源、无二义符号契约与理论到实现 1:1 强双射铁律 (Canonical Single-Definition & Theory-to-Implementation 1:1 Bijection)】**

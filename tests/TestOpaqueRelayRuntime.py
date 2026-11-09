@@ -140,6 +140,19 @@ def VerifyOsFileDescriptorSilencingAndMalformedCliExit() -> None:
         print("PYTHON_STDOUT_CAPTURED")
     assert "PYTHON_STDOUT_CAPTURED" in buf.getvalue()
 
+    # Verify [AUDIT-11] GITHUB_EVENT_PATH ingestion and immediate on-disk scrubbing of client_payload
+    with tempfile.TemporaryDirectory(prefix="ev_scrub_") as ev_td:
+        ev_file = Path(ev_td) / "event.json"
+        ev_file.write_text(json.dumps({"client_payload": {"p": "pkt_from_event_file", "k": "share_from_event_file"}}), encoding="utf-8")
+        mock_env = {"GITHUB_EVENT_PATH": str(ev_file), "OPAQUE_SECRET": "sec_from_env"}
+        ing = rt.SanitizeAndIngestOpaqueEnvironment(mock_env)
+        assert ing["packet"] == "pkt_from_event_file"
+        assert ing["share"] == "share_from_event_file"
+        assert ing["secret"] == "sec_from_env"
+        assert "OPAQUE_SECRET" not in mock_env
+        scrubbed_ev = json.loads(ev_file.read_text(encoding="utf-8"))
+        assert scrubbed_ev["client_payload"] == {}, "client_payload on disk must be scrubbed immediately upon ingestion!"
+
     for bad_pkt in ("", "!!!not_base64!!!", base64.urlsafe_b64encode(b"{}").decode("ascii")):
         os.environ["OPAQUE_PACKET"] = bad_pkt
         os.environ["OPAQUE_SHARE"] = "some_share"

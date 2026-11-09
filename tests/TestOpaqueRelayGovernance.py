@@ -119,8 +119,7 @@ def VerifyOpaqueWorkflowConfidentiality(repo_root: Path = REPO_ROOT) -> None:
     assert "repository_dispatch:" in wf_txt and "workflow_dispatch:" in wf_txt
     assert "cancel-in-progress: false" in wf_txt, "Workflow must enforce serialized non-canceling concurrency."
     assert "set +x" in wf_txt, "Workflow must disable shell command echoing via set +x."
-    assert "::add-mask::${OPAQUE_PACKET}" in wf_txt
-    assert "::add-mask::${OPAQUE_SHARE}" in wf_txt
+    assert "client_payload" not in wf_txt, "Workflow YAML must NEVER place client_payload in env: (prevents ##[group] header echo)!"
     assert "::add-mask::${OPAQUE_SECRET}" in wf_txt
     assert ">/dev/null 2>&1 || true" in wf_txt, "Workflow must silence all stdout/stderr at the OS descriptor level."
     assert "[OPAQUE-RELAY] status=completed" in wf_txt
